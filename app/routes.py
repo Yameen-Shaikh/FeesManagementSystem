@@ -1,35 +1,60 @@
-from flask import request, jsonify, render_template, Flask
-from main import auth_bp
-from db import get_db
+from flask import request, jsonify, Blueprint
+from .db import get_db
+from werkzeug.security import generate_password_hash, check_password_hash
 
-app = Flask()
-@app.route("/", methods = ["GET"])
+bp = Blueprint('routes', __name__)
+
+@bp.route("/", methods=["GET"])
 def home():
-    return render_template('dashboard.html')
-
-@auth_bp.route("/login", method = ["POST"])
-def login(): #TODO: password hashing
     return "Working"
 
-@auth_bp.route("/logout", method = ["POST"])
-def logout():
-    return
+@bp.route("/login", methods=["POST"])
+def login():
+    data = request.get_json()
+    roll_no = data.get("roll_no")
+    password = data.get("password")
+    cur = get_db().cursor()
+    cur.execute(f"SELECT password FROM students WHERE roll_no = {roll_no}")
+    student = cur.fetchone()
+    if student and check_password_hash(student["password"], password):
+        return jsonify({"message": "Login successful"})
+    return jsonify({"message": "Invalid credentials"}), 401
 
-@app.route("/student/<int:roll_no>", methods=["GET"])
+@bp.route("/logout", methods=["POST"])
+def logout():
+    return "Logged out"
+
+@bp.route("/student/<int:roll_no>", methods=["GET"])
 def get_student(roll_no):
     cur = get_db().cursor()
-    cur.execute(f"SELECT * FROM students WHERE roll_no == {roll_no}")
-    rows = cur.fetchall()
-    return jsonify([dict(row) for row in rows])
+    cur.execute(f"SELECT roll_no, name, admission_date, paid_fees FROM students WHERE roll_no = {roll_no}")
+    row = cur.fetchone()
+    if row:
+        return jsonify(dict(row))
+    return jsonify({"message": "Student not found"}), 404
 
-@app.route("/add_student", methods=["POST"])
+@bp.route("/add_student", methods=["POST"])
 def add_student():
     data = request.get_json()
     name = data.get("name")
     roll_no = data.get("roll_no")
-    age = data.get("age")
-    
+    password = data.get("password")
+    admission_date = data.get("admission_date")
+    paid_fees = data.get("paid_fees")
+
+    if not all([name, roll_no, password, admission_date, paid_fees]):
+        return jsonify({"message": "Missing required fields"}), 400
+
+    hashed_password = generate_password_hash(password)
+
     cur = get_db().cursor()
-    cur.execute("INSERT INTO students (name, roll_no, age) VALUES (?, ?, ?)", (name, roll_no, age))
-    get_db().commit()
-    return jsonify({"message": "Student added successfully"}), 201
+    try:
+        cur.execute(
+            "INSERT INTO students (name, roll_no, password, admission_date, paid_fees) VALUES (?, ?, ?, ?, ?)",
+            (name, roll_no, hashed_password, admission_date, paid_fees),
+        )
+        get_db().commit()
+        return jsonify({"message": "Student added successfully"}), 201
+    except Exception as e:
+        get_db().rollback()
+        return jsonify({"message": str(e)}), 500
